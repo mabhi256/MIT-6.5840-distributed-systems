@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 //
@@ -8,14 +10,17 @@ package main
 // go build -buildmode=plugin crash.go
 //
 
-import "6.5840/mr"
-import "math/rand"
-import "strings"
-import "strconv"
-import "time"
-import "fmt"
-import "os"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"6.5840/mr"
+)
 
 var count int
 
@@ -28,7 +33,7 @@ func Map(filename string, contents string) []mr.KeyValue {
 		panic(err)
 	}
 	time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
-	return []mr.KeyValue{mr.KeyValue{"a", "x"}}
+	return []mr.KeyValue{{Key: "a", Value: "x"}}
 }
 
 func Reduce(key string, values []string) string {

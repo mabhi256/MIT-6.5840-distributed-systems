@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 //
@@ -8,14 +10,17 @@ package main
 // go build -buildmode=plugin crash.go
 //
 
-import "6.5840/mr"
-import crand "crypto/rand"
-import "math/big"
-import "strings"
-import "os"
-import "sort"
-import "strconv"
-import "time"
+import (
+	crand "crypto/rand"
+	"math/big"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"6.5840/mr"
+)
 
 func maybeCrash() {
 	max := big.NewInt(1000)
@@ -35,10 +40,10 @@ func Map(filename string, contents string) []mr.KeyValue {
 	maybeCrash()
 
 	kva := []mr.KeyValue{}
-	kva = append(kva, mr.KeyValue{"a", filename})
-	kva = append(kva, mr.KeyValue{"b", strconv.Itoa(len(filename))})
-	kva = append(kva, mr.KeyValue{"c", strconv.Itoa(len(contents))})
-	kva = append(kva, mr.KeyValue{"d", "xyzzy"})
+	kva = append(kva, mr.KeyValue{Key: "a", Value: filename})
+	kva = append(kva, mr.KeyValue{Key: "b", Value: strconv.Itoa(len(filename))})
+	kva = append(kva, mr.KeyValue{Key: "c", Value: strconv.Itoa(len(contents))})
+	kva = append(kva, mr.KeyValue{Key: "d", Value: "xyzzy"})
 	return kva
 }
 
