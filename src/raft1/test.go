@@ -2,6 +2,8 @@ package raft
 
 import (
 	"fmt"
+	"log"
+
 	//log
 	"math/rand"
 	"sync"
@@ -11,7 +13,7 @@ import (
 
 	"6.5840/labrpc"
 	"6.5840/raftapi"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 type Test struct {
@@ -131,6 +133,10 @@ func (ts *Test) checkLogs(i int, m raftapi.ApplyMsg) (string, bool) {
 	me := ts.srvs[i]
 	for j, rs := range ts.srvs {
 		if old, oldok := rs.Logs(m.CommandIndex); oldok && old != v {
+			fmt.Println("--------")
+			for _, server := range ts.srvs {
+				log.Printf("[S%d]: log %v\n", server.me, rs.logs)
+			}
 			//log.Printf("%v: log %v; server %v\n", i, me.logs, rs.logs)
 			// some server has already committed a different value for this entry!
 			err_msg = fmt.Sprintf("commit index=%v server=%v %v != server=%v %v",
