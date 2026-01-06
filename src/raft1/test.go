@@ -224,6 +224,7 @@ func (ts *Test) nCommitted(index int) (int, any) {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 3B tests.
 func (ts *Test) one(cmd any, expectedServers int, retry bool) int {
+	// fmt.Println("------- testing command:", cmd)
 	var textretry string
 	if retry {
 		textretry = "with"
@@ -284,6 +285,9 @@ func (ts *Test) one(cmd any, expectedServers int, retry bool) int {
 		}
 	}
 	if ts.checkFinished() == false {
+		// for _, peer := range ts.srvs {
+		// 	fmt.Printf("[S%d] Logs: %v\n", peer.me, peer.logs)
+		// }
 		desp := fmt.Sprintf("agreement of %.8s failed", textcmd)
 		tester.AnnotateCheckerFailure(desp, "failed after 10-second timeout")
 		ts.Fatalf("one(%v) failed to reach agreement", cmd)
