@@ -29,8 +29,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	// DPrintf("[S%d][term-%d][%s] received AppendEntry from S%d for term %d\n", rf.me, rf.currentTerm, rf.state, args.LeaderId, args.Term)
 
-	rf.lastHeartbeat = time.Now()
-	// rf.resetElectionTimeout()
 	reply.Term = rf.currentTerm
 
 	if args.Term < rf.currentTerm {
@@ -38,6 +36,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.XTerm = rf.currentTerm
 		return
 	}
+
+	rf.lastHeartbeat = time.Now()
+	rf.resetElectionTimeout()
 
 	// If we're a candidate, and receive AppendEntries with same term
 	// it means a leader has been elected - step down
@@ -68,7 +69,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	for i, entry := range args.Entries {
-		index := entry.Index - rf.log[0].Index
+		index := entry.Index - rf.firstLogEntry().Index
 		if index >= len(rf.log) {
 			// Entry doesn't exist, append it and all remaining
 			rf.log = append(rf.log, args.Entries[i:]...)
