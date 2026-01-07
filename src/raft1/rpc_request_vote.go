@@ -27,9 +27,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	reply.Term = rf.currentTerm
+
 	// Reply false if term < currentTerm (§5.1)
 	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
 	}
@@ -41,7 +42,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// If 2 logs entries have different terms, then the log with the later term is more up-to-date.
 	// Else then longer log is more up-to-date.
 	isCandidateUpToDate := false
-	lastLogEntry := rf.getLastLogEntry()
+	lastLogEntry := rf.lastLogEntry()
 	if args.LastLogTerm != lastLogEntry.Term {
 		isCandidateUpToDate = args.LastLogTerm > lastLogEntry.Term
 	} else {
@@ -56,7 +57,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		rf.votedFor = args.CandidateId
 		rf.persist()
-		reply.Term = args.Term
 		reply.VoteGranted = true
 		return
 	}

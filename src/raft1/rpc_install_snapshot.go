@@ -24,15 +24,16 @@ type InstallSnapshotReply struct {
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	DPrintf("[S%d][term-%d] Received InstallSnapshot RPC for index: %d\n", rf.me, rf.currentTerm, args.LastIncludedIndex)
 
-	rf.lastHeartbeat = time.Now()
 	reply.Term = rf.currentTerm
 
 	if args.Term < rf.currentTerm {
-		rf.mu.Unlock()
 		return
 	}
+
+	rf.lastHeartbeat = time.Now()
 
 	if args.Term == rf.currentTerm && rf.state == Candidate {
 		rf.becomeFollower(args.Term)
@@ -40,32 +41,38 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.becomeFollower(args.Term)
 	}
 
-	// Reject stale snapshots
-	if args.LastIncludedIndex <= rf.lastIncludedIndex {
-		rf.mu.Unlock()
+	// 2. Create new snapshot file if first chunk (offset is 0)
+	// 3. Write data into snapshot file at given offset
+	// 4. Reply and wait for more data chunks if done is false
+	// 5. Save snapshot file, discard any existing or partial snapshot with a smaller index
+	if args.LastIncludedIndex <= rf.commitIndex {
 		return
 	}
 
-	// Keep entries after the snapshot
-	newLog := make([]LogEntry, 0)
-	for i := range rf.log {
-		if rf.log[i].Index > args.LastIncludedIndex {
-			newLog = append(newLog, rf.log[i])
+	// 6. If existing log entry has same index and term as snapshot’s last included entry,
+	// retain log entries following it and reply
+	newLog := []LogEntry{{
+		Command: nil,
+		Index:   args.LastIncludedIndex,
+		Term:    args.LastIncludedTerm,
+	}}
+
+	for i, entry := range rf.log {
+		if entry.Index == args.LastIncludedIndex && entry.Term == args.LastIncludedTerm {
+			// Found matching entry - keep everything after it
+			newLog = append(newLog, rf.log[i+1:]...)
+			break
 		}
 	}
 
+	// 7. Discard the entire log
 	rf.log = newLog
-	rf.lastIncludedIndex = args.LastIncludedIndex
-	rf.lastIncludedTerm = args.LastIncludedTerm
 
-	// Update commitIndex if needed
-	if rf.commitIndex < args.LastIncludedIndex {
-		rf.commitIndex = args.LastIncludedIndex
-	}
+	rf.commitIndex = args.LastIncludedIndex
+	rf.lastApplied = args.LastIncludedIndex
 
 	rf.persister.Save(rf.encodeRaftState(), args.Data)
 
-	// Set pending snapshot - applyMsgSender will update lastApplied when it sends this
 	rf.snapshotMsg = &raftapi.ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      args.Data,
@@ -73,6 +80,5 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotIndex: args.LastIncludedIndex,
 	}
 
-	rf.mu.Unlock()
 	rf.applyCond.Signal()
 }
