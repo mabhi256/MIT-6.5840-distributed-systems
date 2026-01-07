@@ -70,7 +70,7 @@ type Raft struct {
 
 	state           State
 	lastHeartbeat   time.Time
-	electionTimeout int
+	electionTimeout time.Duration
 
 	// Persistent state on ALL servers: (Updated on stable storage before responding to RPCs)
 	currentTerm int
@@ -78,8 +78,10 @@ type Raft struct {
 	log         []LogEntry
 
 	// Volatile state on ALL servers
-	commitIndex int
-	lastApplied int
+	commitIndex         int
+	lastApplied         int
+	snapshotMsg         *raftapi.ApplyMsg
+	isSnapshotAvailable bool
 
 	// Volatile state on Leader: (Reinitialized after election)
 	nextIndex  []int
@@ -92,6 +94,14 @@ func (rf *Raft) firstLogEntry() LogEntry {
 	}
 
 	return rf.log[0]
+}
+
+func (rf *Raft) lastIncludedIndex() int {
+	return rf.firstLogEntry().Index
+}
+
+func (rf *Raft) lastIncludedTerm() int {
+	return rf.firstLogEntry().Term
 }
 
 func (rf *Raft) lastLogEntry() LogEntry {
@@ -132,26 +142,14 @@ func (rf *Raft) becomeLeader() {
 	go rf.broadCastHeartbeat()
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	term := rf.currentTerm
 	isleader := rf.state == Leader
 
 	return term, isleader
 }
 
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-// before you've implemented snapshots, you should pass nil as the
-// second argument to persister.Save().
-// after you've implemented snapshots, pass the current snapshot
-// (or nil if there's not yet a snapshot).
-func (rf *Raft) persist() {
+func (rf *Raft) encodeRaftState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
@@ -159,8 +157,11 @@ func (rf *Raft) persist() {
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
 
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	return w.Bytes()
+}
+
+func (rf *Raft) persist() {
+	rf.persister.Save(rf.encodeRaftState(), rf.persister.ReadSnapshot())
 }
 
 // restore previously persisted state.
@@ -183,11 +184,11 @@ func (rf *Raft) readPersist(data []byte) {
 	if err != nil {
 		log.Fatalf("Err decoding: %s", err.Error())
 	} else {
-		rf.mu.Lock()
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = entries
-		rf.mu.Unlock()
+		rf.lastApplied = rf.lastIncludedIndex()
+		rf.commitIndex = rf.lastIncludedIndex()
 	}
 }
 
@@ -203,8 +204,18 @@ func (rf *Raft) PersistBytes() int {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (3D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if index <= rf.lastIncludedIndex() {
+		return
+	}
+
+	snapshotIdx := index - rf.lastIncludedIndex()
+	rf.log = rf.log[snapshotIdx:] // keep snapshotIdx as sentinel, remove previous entries
+	rf.log[0].Command = nil
+
+	rf.persister.Save(rf.encodeRaftState(), snapshot)
 }
 
 func (rf *Raft) Start(command any) (int, int, bool) {
@@ -215,7 +226,7 @@ func (rf *Raft) Start(command any) (int, int, bool) {
 	isLeader := rf.state == Leader
 
 	if isLeader {
-		index = len(rf.log)
+		index = rf.lastLogEntry().Index + 1
 		latestEntry := LogEntry{Command: command, Index: index, Term: term}
 		rf.matchIndex[rf.me] = index
 		rf.log = append(rf.log, latestEntry)
@@ -264,16 +275,16 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 		rf.mu.Lock()
-		timeoutDuration := time.Duration(rf.electionTimeout) * time.Millisecond
+		timeout := rf.electionTimeout
 		isLeader := rf.state == Leader
-		isElectionTimeout := !isLeader && time.Since(rf.lastHeartbeat) > timeoutDuration
+		isElectionTimeout := !isLeader && time.Since(rf.lastHeartbeat) > timeout
 		rf.mu.Unlock()
 
 		if isLeader {
 			// repeat (heartbeat) during idle periods to prevent election timeouts
 			rf.broadCastHeartbeat()
 		} else if isElectionTimeout {
-			rf.startElection(timeoutDuration)
+			rf.startElection(timeout)
 		}
 
 		time.Sleep(HEARTBEAT_FREQ)
@@ -332,9 +343,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, ch chan bool)
 	}
 
 	ch <- reply.VoteGranted
-	// if reply.VoteGranted {
-	// 	DPrintf("[S%d][term-%d] got vote from S%d", rf.me, rf.currentTerm, server)
-	// }
 }
 
 func (rf *Raft) tallyVotes(ctx context.Context, ch <-chan bool, currentTerm int) {
@@ -365,14 +373,13 @@ func (rf *Raft) tallyVotes(ctx context.Context, ch <-chan bool, currentTerm int)
 func (rf *Raft) broadCastHeartbeat() {
 	// lock once for all peers
 	rf.mu.Lock()
-	requests := make([]*AppendEntriesArgs, len(rf.peers))
+	requests := make([]any, len(rf.peers))
 
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
-
-		requests[i] = rf.prepareAppendEntries(i)
+		requests[i] = rf.prepareReplicationArgs(i)
 	}
 	rf.mu.Unlock()
 
@@ -382,15 +389,22 @@ func (rf *Raft) broadCastHeartbeat() {
 		}
 
 		// piggyback log replication on heartbeats to reduce RPC overhead
-		go rf.sendAppendEntries(i, requests[i], true)
+		go rf.sendReplicationRPC(i, requests[i], true)
+	}
+}
+
+func (rf *Raft) prepareReplicationArgs(server int) any {
+	if rf.nextIndex[server] <= rf.lastIncludedIndex() {
+		return rf.prepareInstallSnapshot()
+	} else {
+		return rf.prepareAppendEntries(server)
 	}
 }
 
 func (rf *Raft) prepareAppendEntries(server int) *AppendEntriesArgs {
-	nextIndex := rf.nextIndex[server]
-	prevLogEntry := rf.log[nextIndex-1]
-	entries := slices.Clone(rf.log[nextIndex:])
-	commitIndex := rf.commitIndex
+	nextIdx := rf.nextIndex[server] - rf.lastIncludedIndex()
+	prevLogEntry := rf.log[nextIdx-1]
+	entries := slices.Clone(rf.log[nextIdx:])
 
 	request := &AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -398,10 +412,65 @@ func (rf *Raft) prepareAppendEntries(server int) *AppendEntriesArgs {
 		PrevLogIndex: prevLogEntry.Index,
 		PrevLogTerm:  prevLogEntry.Term,
 		Entries:      entries,
-		LeaderCommit: commitIndex,
+		LeaderCommit: rf.commitIndex,
 	}
 
 	return request
+}
+
+func (rf *Raft) prepareInstallSnapshot() *InstallSnapshotArgs {
+	request := &InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.lastIncludedIndex(),
+		LastIncludedTerm:  rf.lastIncludedTerm(),
+		Offset:            0,
+		Data:              rf.persister.ReadSnapshot(),
+		Done:              true,
+	}
+
+	return request
+}
+
+func (rf *Raft) sendReplicationRPC(server int, request any, isHeartbeat bool) {
+	switch request := request.(type) {
+	case *InstallSnapshotArgs:
+		rf.sendInstallSnapshot(server, request, isHeartbeat)
+	case *AppendEntriesArgs:
+		rf.sendAppendEntries(server, request, isHeartbeat)
+	}
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, isHeartbeat bool) {
+	reply := &InstallSnapshotReply{}
+
+	for !rf.killed() {
+		ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+		if !ok {
+			if isHeartbeat {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+
+		if rf.state != Leader || rf.currentTerm != args.Term {
+			return
+		}
+
+		if reply.Term > args.Term {
+			rf.becomeFollower(reply.Term)
+			return
+		}
+
+		rf.matchIndex[server] = rf.lastIncludedIndex()
+		rf.nextIndex[server] = rf.lastIncludedIndex() + 1
+		rf.replicatorCond[server].Signal()
+		return
+	}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, isHeartbeat bool) {
@@ -419,36 +488,30 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, isHeartbe
 		}
 
 		rf.mu.Lock()
+		defer rf.mu.Unlock()
+
 		if rf.currentTerm != args.Term || rf.state != Leader {
-			rf.mu.Unlock()
 			return
 		}
 
 		if reply.Term > args.Term {
 			rf.becomeFollower(reply.Term)
-			rf.mu.Unlock()
 			return
 		}
 
 		if reply.Success {
 			rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 			rf.nextIndex[server] = rf.matchIndex[server] + 1
-
 			// DPrintf("[S%d][term-%d][%s] replicated by S%d up to %v", rf.me, rf.currentTerm, rf.state, server, rf.log[rf.matchIndex[server]])
 
-			// Try to advance commitIndex
 			rf.updateCommitIndex()
-			rf.mu.Unlock()
 			return
 		} else {
-			rf.mu.Unlock()
 			rf.backupNextIndex(server, reply)
 
 			if isHeartbeat {
 				// Wake up the replicator if there the follower lags
-				rf.mu.Lock()
 				rf.replicatorCond[server].Signal()
-				rf.mu.Unlock()
 			}
 			return
 		}
@@ -456,14 +519,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, isHeartbe
 }
 
 func (rf *Raft) backupNextIndex(server int, reply *AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	if reply.XTerm == -1 {
 		// Follower log is too short, set nextIndex = XLen (right after follower's log)
 		rf.nextIndex[server] = reply.XLen
 	} else {
-		lastIndex := rf.lastEntryIndexForTerm(reply.XTerm)
+		lastIndex := rf.lastIdxForTerm(reply.XTerm)
 		if lastIndex == -1 {
 			// Leader doesn't have XTerm which starts at reply.XIndex,
 			// set nextIndex = XIndex, the term's 1st index and skip all the entries with XTerm in follower
@@ -472,7 +532,7 @@ func (rf *Raft) backupNextIndex(server int, reply *AppendEntriesReply) {
 			// Leader has XTerm but has less entries for the term than the follower
 			// set nextIndex = leader's lastIndex for this term + 1,
 			// Ex. Follower has [3,4,4,5,5,5] but Leader has [3,4,4,5]
-			rf.nextIndex[server] = lastIndex + 1
+			rf.nextIndex[server] = rf.log[lastIndex].Index + 1
 		}
 	}
 }
@@ -481,8 +541,9 @@ func (rf *Raft) updateCommitIndex() {
 	// If there exists an N s.t.
 	// N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 	// set commitIndex = N
-	for n := len(rf.log) - 1; n > rf.commitIndex; n-- {
-		if rf.log[n].Term != rf.currentTerm {
+	for n := rf.lastLogEntry().Index; n > rf.commitIndex; n-- {
+		idx := n - rf.lastIncludedIndex()
+		if rf.log[idx].Term != rf.currentTerm {
 			continue
 		}
 
@@ -506,18 +567,47 @@ func (rf *Raft) applyMsgSender() {
 	for !rf.killed() {
 		rf.mu.Lock()
 
-		// Wait until there's something to apply
-		for rf.commitIndex <= rf.lastApplied {
+		// Wait until there's something to apply (either committed entries or a snapshot)
+		for rf.commitIndex <= rf.lastApplied && !rf.isSnapshotAvailable {
 			rf.applyCond.Wait()
 		}
 
-		commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
-		entries := slices.Clone(rf.log[lastApplied+1 : commitIndex+1])
-		if len(entries) > 0 {
-			DPrintf("[S%d][term-%d][%s] applying command till : %v", rf.me, rf.currentTerm, rf.state, entries[len(entries)-1])
+		// Check for pending snapshot to send
+		var snapshot []byte
+		snapshotTerm := rf.lastIncludedTerm()
+		snapshotIndex := rf.lastIncludedIndex()
+		if rf.isSnapshotAvailable {
+			snapshot = rf.persister.ReadSnapshot()
+			rf.isSnapshotAvailable = false
+
+			DPrintf("[S%d][term-%d][%s] applying snapshot at index: %d, term: %d",
+				rf.me, rf.currentTerm, rf.state, rf.lastIncludedIndex(), rf.lastIncludedTerm())
 		}
+
+		// Collect entries to apply
+		entries := make([]LogEntry, 0)
+		if rf.commitIndex > rf.lastApplied {
+			fromIdx := rf.lastApplied - rf.lastIncludedIndex() + 1
+			toIdx := rf.commitIndex - rf.lastIncludedIndex()
+
+			entries = slices.Clone(rf.log[fromIdx : toIdx+1])
+			rf.lastApplied = rf.log[toIdx].Index
+			DPrintf("[S%d][term-%d][%s] applying command till : %v", rf.me, rf.currentTerm, rf.state, rf.log[toIdx])
+		}
+
 		rf.mu.Unlock()
 
+		// Apply snapshot if present
+		if snapshot != nil {
+			rf.applyCh <- raftapi.ApplyMsg{
+				SnapshotValid: true,
+				Snapshot:      snapshot,
+				SnapshotTerm:  snapshotTerm,
+				SnapshotIndex: snapshotIndex,
+			}
+		}
+
+		// Apply log entries to state machine
 		for _, entry := range entries {
 			rf.applyCh <- raftapi.ApplyMsg{
 				CommandValid: true,
@@ -525,27 +615,33 @@ func (rf *Raft) applyMsgSender() {
 				CommandIndex: entry.Index,
 			}
 		}
-
-		rf.mu.Lock()
-		if rf.lastApplied < commitIndex {
-			rf.lastApplied = commitIndex
-		}
-		rf.mu.Unlock()
 	}
 }
 
 func (rf *Raft) replicator(server int) {
 	for !rf.killed() {
-
 		rf.mu.Lock()
-		for rf.state != Leader || rf.matchIndex[server] >= rf.lastLogEntry().Index {
+		for !rf.isReplicationPending(server) {
 			rf.replicatorCond[server].Wait()
 		}
-		request := rf.prepareAppendEntries(server)
+		request := rf.prepareReplicationArgs(server)
 		rf.mu.Unlock()
 
-		rf.sendAppendEntries(server, request, false)
+		rf.sendReplicationRPC(server, request, false)
+
+		time.Sleep(RETRY_FREQ)
+		// rf.mu.Lock()
+		// stillLagging := rf.isReplicationPending(server)
+		// rf.mu.Unlock()
+
+		// if stillLagging {
+		// 	time.Sleep(RETRY_FREQ)
+		// }
 	}
+}
+
+func (rf *Raft) isReplicationPending(server int) bool {
+	return rf.state == Leader && rf.matchIndex[server] < rf.lastLogEntry().Index
 }
 
 // the service or tester wants to create a Raft server. the ports

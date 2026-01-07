@@ -19,7 +19,8 @@ type RequestVoteReply struct {
 
 // Randomized 300-500ms election timeout
 func (rf *Raft) resetElectionTimeout() {
-	rf.electionTimeout = ELECTION_TIMEOUT_MIN + rand.IntN(ELECTION_TIMEOUT_RANGE)
+	timeout := ELECTION_TIMEOUT_MIN + rand.IntN(ELECTION_TIMEOUT_RANGE)
+	rf.electionTimeout = time.Duration(timeout) * time.Millisecond
 }
 
 // RequestVote RPC handler.
@@ -27,7 +28,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("[S%d][term-%d][%s] received RequestVote from S%d for term %d\n", rf.me, rf.currentTerm, rf.state, args.CandidateId, args.Term)
+	// DPrintf("[S%d][term-%d][%s] received RequestVote from S%d for term %d\n", rf.me, rf.currentTerm, rf.state, args.CandidateId, args.Term)
 
 	reply.Term = rf.currentTerm
 
@@ -61,7 +62,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = args.CandidateId
 		rf.persist()
 
-		DPrintf("[S%d][term-%d][%s] granting vote to S%d for term %d\n", rf.me, rf.currentTerm, rf.state, args.CandidateId, args.Term)
+		// DPrintf("[S%d][term-%d][%s] granting vote to S%d for term %d\n", rf.me, rf.currentTerm, rf.state, args.CandidateId, args.Term)
 		return
 	}
 }
