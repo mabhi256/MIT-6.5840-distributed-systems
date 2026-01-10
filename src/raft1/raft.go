@@ -143,6 +143,9 @@ func (rf *Raft) becomeLeader() {
 }
 
 func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	term := rf.currentTerm
 	isleader := rf.state == Leader
 
@@ -263,7 +266,12 @@ func (rf *Raft) replicateToAll() {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
+
+	rf.applyCh <- raftapi.ApplyMsg{
+		CommandValid:  false,
+		SnapshotValid: false,
+	}
+	rf.applyCond.Broadcast() // Wake up applyMsgSender if waiting
 }
 
 func (rf *Raft) killed() bool {
@@ -597,6 +605,10 @@ func (rf *Raft) applyMsgSender() {
 
 		rf.mu.Unlock()
 
+		if rf.killed() {
+			return
+		}
+
 		// Apply snapshot if present
 		if snapshot != nil {
 			rf.applyCh <- raftapi.ApplyMsg{
@@ -609,6 +621,10 @@ func (rf *Raft) applyMsgSender() {
 
 		// Apply log entries to state machine
 		for _, entry := range entries {
+			if rf.killed() {
+				return
+			}
+
 			rf.applyCh <- raftapi.ApplyMsg{
 				CommandValid: true,
 				Command:      entry.Command,

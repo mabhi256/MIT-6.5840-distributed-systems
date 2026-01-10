@@ -212,9 +212,9 @@ for i in {1..20}; do go test || break; done
 - DFS / HDFS
 - Spark implementation
 - Object store S3
-- Asynchronous replication - eventual consistency like DynamoDB
+- Asynchronous replication - eventual consistency like DynamoDB, - Social media likes, DNS
 - CDN - distributed cooperative web cache like Cloudflare
 - File synchronizer like Google Drive
-- Collaborative editor with CRDT / OT like Google Doc
+- Collaborative editor with CRDT / OT like Google Doc - causal consistency
 - Distributed block store like Amazon EBS
 - Use modern high-speed NIC features (e.g. RDMA or DPDK) to build a high-speed service, perhaps with replication or transactions.

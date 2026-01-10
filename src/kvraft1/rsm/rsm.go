@@ -1,25 +1,30 @@
 package rsm
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/raft1"
+	raft "6.5840/raft1"
 	"6.5840/raftapi"
-	"6.5840/tester1"
-
+	tester "6.5840/tester1"
+	"github.com/google/uuid"
 )
 
 var useRaftStateMachine bool // to plug in another raft besided raft1
 
-
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Me  int
+	Id  uuid.UUID
+	Req any
 }
 
+type OpRes struct {
+	Id  uuid.UUID
+	Res any
+}
 
 // A server (i.e., ../server.go) that wants to replicate itself calls
 // MakeRSM and must implement the StateMachine interface.  This
@@ -40,7 +45,11 @@ type RSM struct {
 	applyCh      chan raftapi.ApplyMsg
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
-	// Your definitions here.
+
+	resChMap map[int]chan OpRes
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // servers[] contains the ports of the set of
@@ -59,15 +68,22 @@ type RSM struct {
 // MakeRSM() must return quickly, so it should start goroutines for
 // any long-running work.
 func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
+	ctx, cancel := context.WithCancel(context.Background())
 	rsm := &RSM{
 		me:           me,
 		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg),
 		sm:           sm,
+		resChMap:     map[int]chan OpRes{},
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	if !useRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+
+	go rsm.reader()
+
 	return rsm
 }
 
@@ -75,16 +91,86 @@ func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
 }
 
+func (rsm *RSM) reader() {
+	defer rsm.cancel()
 
-// Submit a command to Raft, and wait for it to be committed.  It
-// should return ErrWrongLeader if client should find new leader and
-// try again.
+	for {
+		msg := <-rsm.applyCh
+
+		switch {
+		case msg.CommandValid:
+			op := msg.Command.(Op)
+			DPrintf("Op: %v\n", op)
+
+			res := rsm.sm.DoOp(op.Req)
+			DPrintf("[S%d] DoOp result: %v\n", rsm.me, res)
+
+			rsm.mu.Lock()
+			ch, exists := rsm.resChMap[msg.CommandIndex]
+			_, isLeader := rsm.rf.GetState()
+			rsm.mu.Unlock()
+
+			if isLeader && exists && ch != nil {
+				opRes := OpRes{Id: op.Id, Res: res}
+				ch <- opRes
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
+	opId := uuid.New()
+	op := Op{Me: rsm.me, Id: opId, Req: req}
 
-	// Submit creates an Op structure to run a command through Raft;
-	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
-	// is the argument to Submit and id is a unique id for the op.
+	index, term, isLeader := rsm.rf.Start(op)
 
-	// your code here
-	return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	rsm.mu.Lock()
+	rsm.resChMap[index] = make(chan OpRes)
+	ch := rsm.resChMap[index]
+	rsm.mu.Unlock()
+
+	defer func() {
+		close(ch)
+
+		rsm.mu.Lock()
+		delete(rsm.resChMap, index)
+		rsm.mu.Unlock()
+	}()
+
+	if !isLeader {
+		return rpc.ErrWrongLeader, nil
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case opRes := <-ch:
+			rsm.mu.Lock()
+			term2, isLeader2 := rsm.rf.GetState()
+			rsm.mu.Unlock()
+			if term != term2 || !isLeader2 || opId != opRes.Id {
+				return rpc.ErrWrongLeader, nil
+			}
+			return rpc.OK, opRes.Res
+
+		case <-ticker.C:
+			rsm.mu.Lock()
+			term2, isLeader2 := rsm.rf.GetState()
+			rsm.mu.Unlock()
+			if term != term2 || !isLeader2 {
+				return rpc.ErrWrongLeader, nil
+			}
+
+		case <-rsm.ctx.Done():
+			return rpc.ErrWrongLeader, nil
+
+			// case <-time.After(1 * time.Second):
+			// 	DPrintf("-----1s")
+			// 	return rpc.ErrWrongLeader, nil
+		}
+	}
 }
