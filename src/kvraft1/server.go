@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -104,12 +105,32 @@ func (kv *KVServer) DoOp(req any) any {
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.Store)
+	e.Encode(kv.Puts)
+	DPrintf("[S%d]----- Snapshot : %v\n", kv.me, kv.Store)
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	if d.Decode(&kv.Store) != nil {
+		log.Fatalf("%v couldn't decode store", kv.me)
+	}
+	DPrintf("[S%d]----- Restore : %v\n", kv.me, kv.Store)
+
+	if d.Decode(&kv.Puts) != nil {
+		log.Fatalf("%v couldn't decode puts cache", kv.me)
+	}
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -165,11 +186,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	labgob.Register(rpc.PutArgs{})
 	labgob.Register(rpc.GetArgs{})
 
-	kv := &KVServer{me: me}
-
+	kv := &KVServer{
+		me:    me,
+		Store: map[string]Record{},
+		Puts:  map[uuid.UUID]CachedPut{},
+	}
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
-	kv.Store = map[string]Record{}
-	kv.Puts = map[uuid.UUID]CachedPut{}
 
 	return []tester.IService{kv, kv.rsm.Raft()}
 }

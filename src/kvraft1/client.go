@@ -9,11 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const SLEEP_DURATION = 75
-const MAX_JITTER = 25
 const RETRY_FREQ = 100 * time.Millisecond
 
-// 4B passes without remembering the leader as well. If we awere to remember it,
+// 4B passes without remembering the leader as well. If we were to remember it,
 // we would need to add leaderId to struct and cycle through servers
 // with id = (leaderID + i) % len(ck.servers) where i := range len(ck.servers)
 type Clerk struct {

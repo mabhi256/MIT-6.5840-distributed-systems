@@ -82,6 +82,12 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
 
+	DPrintf("[S%d]-------------------------RESTART\n", me)
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		rsm.sm.Restore(snapshot)
+		DPrintf("[S%d] Restore after crash\n", me)
+	}
 	go rsm.reader()
 
 	return rsm
@@ -100,20 +106,31 @@ func (rsm *RSM) reader() {
 		switch {
 		case msg.CommandValid:
 			op := msg.Command.(Op)
-			DPrintf("[S%d] Op: %v\n", rsm.me, op)
+			// DPrintf("[S%d] Op: %v\n", rsm.me, op)
 
 			res := rsm.sm.DoOp(op.Req)
-			DPrintf("[S%d] DoOp result: %v\n", rsm.me, res)
+			// DPrintf("[S%d] DoOp result: %v\n", rsm.me, res)
 
 			rsm.mu.Lock()
 			ch, exists := rsm.resChMap[msg.CommandIndex]
 			_, isLeader := rsm.rf.GetState()
 			rsm.mu.Unlock()
+			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() > rsm.maxraftstate {
+				rsm.rf.Snapshot(msg.CommandIndex, rsm.sm.Snapshot())
+				DPrintf("[S%d] Snapshot @ Index-%d\n", rsm.me, msg.CommandIndex)
+			}
 
 			if isLeader && exists && ch != nil {
 				opRes := OpRes{Id: op.Id, Res: res}
 				ch <- opRes
 			}
+
+		case msg.SnapshotValid:
+			// rsm.mu.Lock()
+			rsm.sm.Restore(msg.Snapshot)
+			DPrintf("[S%d] Restore @ Index-%d\n", rsm.me, msg.SnapshotIndex)
+			// rsm.mu.Unlock()
+
 		default:
 			return
 		}
@@ -137,8 +154,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	rsm.mu.Unlock()
 
 	defer func() {
-		close(ch)
-
+		// close(ch)
 		rsm.mu.Lock()
 		delete(rsm.resChMap, index)
 		rsm.mu.Unlock()
@@ -168,10 +184,6 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 		case <-rsm.ctx.Done():
 			return rpc.ErrWrongLeader, nil
-
-			// case <-time.After(1 * time.Second):
-			// 	DPrintf("-----1s")
-			// 	return rpc.ErrWrongLeader, nil
 		}
 	}
 }
