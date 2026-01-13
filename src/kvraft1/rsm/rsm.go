@@ -100,7 +100,7 @@ func (rsm *RSM) reader() {
 		switch {
 		case msg.CommandValid:
 			op := msg.Command.(Op)
-			DPrintf("Op: %v\n", op)
+			DPrintf("[S%d] Op: %v\n", rsm.me, op)
 
 			res := rsm.sm.DoOp(op.Req)
 			DPrintf("[S%d] DoOp result: %v\n", rsm.me, res)
@@ -124,11 +124,16 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	opId := uuid.New()
 	op := Op{Me: rsm.me, Id: opId, Req: req}
 
+	rsm.mu.Lock()
 	index, term, isLeader := rsm.rf.Start(op)
 
-	rsm.mu.Lock()
-	rsm.resChMap[index] = make(chan OpRes)
-	ch := rsm.resChMap[index]
+	if !isLeader {
+		rsm.mu.Unlock()
+		return rpc.ErrWrongLeader, nil
+	}
+
+	ch := make(chan OpRes)
+	rsm.resChMap[index] = ch
 	rsm.mu.Unlock()
 
 	defer func() {
@@ -139,10 +144,6 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		rsm.mu.Unlock()
 	}()
 
-	if !isLeader {
-		return rpc.ErrWrongLeader, nil
-	}
-
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -152,7 +153,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 			rsm.mu.Lock()
 			term2, isLeader2 := rsm.rf.GetState()
 			rsm.mu.Unlock()
-			if term != term2 || !isLeader2 || opId != opRes.Id {
+			if term != term2 || !isLeader2 || op.Id != opRes.Id {
 				return rpc.ErrWrongLeader, nil
 			}
 			return rpc.OK, opRes.Res

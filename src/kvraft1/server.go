@@ -1,15 +1,27 @@
 package kvraft
 
 import (
+	"log"
+	"sync"
 	"sync/atomic"
 
 	"6.5840/kvraft1/rsm"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
 	"6.5840/labrpc"
-	"6.5840/tester1"
-
+	tester "6.5840/tester1"
+	"github.com/google/uuid"
 )
+
+type Record struct {
+	Value   string
+	Version rpc.Tversion
+}
+
+type CachedPut struct {
+	PutID int
+	Reply rpc.PutReply
+}
 
 type KVServer struct {
 	me   int
@@ -17,6 +29,9 @@ type KVServer struct {
 	rsm  *rsm.RSM
 
 	// Your definitions here.
+	mu    sync.Mutex
+	Store map[string]Record
+	Puts  map[uuid.UUID]CachedPut // Map ClientID → cached put (putID + response)
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -25,7 +40,66 @@ type KVServer struct {
 // https://go.dev/tour/methods/16
 // https://go.dev/tour/methods/15
 func (kv *KVServer) DoOp(req any) any {
-	// Your code here
+	switch req := req.(type) {
+	case rpc.GetArgs:
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+
+		reply := rpc.GetReply{}
+		record, exists := kv.Store[req.Key]
+		if !exists {
+			DPrintf("[S%d] DoOp GET %v, ErrNoKey\n", kv.me, req)
+			reply.Err = rpc.ErrNoKey
+			return reply
+		}
+
+		reply.Err = rpc.OK
+		reply.Value = record.Value
+		reply.Version = record.Version
+		DPrintf("[S%d] DoOp GET %v, reply:%v\n", kv.me, req, reply)
+		return reply
+
+	case rpc.PutArgs:
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+
+		cached, isCached := kv.Puts[req.ClientID]
+		if isCached {
+			if req.ReqID < cached.PutID {
+				return rpc.PutReply{Err: rpc.ErrVersion}
+			}
+			if req.ReqID == cached.PutID {
+				return cached.Reply
+			}
+		}
+
+		record, exists := kv.Store[req.Key]
+		reply := rpc.PutReply{}
+
+		switch {
+		case !exists && req.Version != 0:
+			reply.Err = rpc.ErrNoKey
+
+		case !exists:
+			// Version: 1 fails in porcupine for some reason
+			kv.Store[req.Key] = Record{Value: req.Value, Version: req.Version + 1}
+			reply.Err = rpc.OK
+
+		case record.Version != req.Version:
+			reply.Err = rpc.ErrVersion
+
+		default:
+			kv.Store[req.Key] = Record{Value: req.Value, Version: req.Version + 1}
+			reply.Err = rpc.OK
+		}
+
+		DPrintf("[S%d] DoOp PUT %v, reply:%v\n", kv.me, req, reply)
+		kv.Puts[req.ClientID] = CachedPut{PutID: req.ReqID, Reply: reply}
+		return reply
+
+	default:
+		log.Fatalf("DoOp should execute only Get & Put and not %T", req)
+	}
 	return nil
 }
 
@@ -39,15 +113,29 @@ func (kv *KVServer) Restore(data []byte) {
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a GetReply: rep.(rpc.GetReply)
+	err, res := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+
+	rep := res.(rpc.GetReply)
+	reply.Err = rep.Err
+	reply.Value = rep.Value
+	reply.Version = rep.Version
+
+	DPrintf("[S%d] Get args: %v reply: %v\n", kv.me, args, reply)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a PutReply: rep.(rpc.PutReply)
+	err, res := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+
+	rep := res.(rpc.PutReply)
+	reply.Err = rep.Err
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -79,8 +167,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 
 	kv := &KVServer{me: me}
 
-
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
-	// You may need initialization code here.
+	kv.Store = map[string]Record{}
+	kv.Puts = map[uuid.UUID]CachedPut{}
+
 	return []tester.IService{kv, kv.rsm.Raft()}
 }

@@ -1,5 +1,7 @@
 package rpc
 
+import "github.com/google/uuid"
+
 type Err string
 
 const (
@@ -19,9 +21,11 @@ const (
 type Tversion uint64
 
 type PutArgs struct {
-	Key     string
-	Value   string
-	Version Tversion
+	Key      string
+	Value    string
+	Version  Tversion
+	ClientID uuid.UUID
+	ReqID    int
 }
 
 type PutReply struct {
@@ -29,7 +33,9 @@ type PutReply struct {
 }
 
 type GetArgs struct {
-	Key string
+	Key      string
+	ClientID uuid.UUID
+	ReqID    int
 }
 
 type GetReply struct {
@@ -37,4 +43,3 @@ type GetReply struct {
 	Version Tversion
 	Err     Err
 }
-
