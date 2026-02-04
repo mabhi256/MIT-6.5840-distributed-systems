@@ -5,7 +5,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 type Server struct {
@@ -52,7 +52,7 @@ func (ts *Test) cleanup() {
 }
 
 func (ts *Test) oneRPC() bool {
-	args := rpc.GetArgs{"xxx"}
+	args := rpc.GetArgs{Key: "xxx"}
 	var reply rpc.GetReply
 	if ok := ts.clnt.Call(ts.sn, "Server.Get", &args, &reply); !ok {
 		return false

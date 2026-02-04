@@ -79,6 +79,8 @@ ok      6.5840/kvsrv1/lock      9.859s
 The main branch implements a replicator goroutine per peer.
 The lab3-naive branch spawns goroutine per RPC
 
+<https://thesquareplanet.com/blog/students-guide-to-raft/>
+
 ```bash
 ❯ cd src/raft1
 ❯ go test -v
