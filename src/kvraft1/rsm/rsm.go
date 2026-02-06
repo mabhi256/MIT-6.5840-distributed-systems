@@ -184,6 +184,9 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 
 		case <-rsm.ctx.Done():
 			return rpc.ErrWrongLeader, nil
+
+		case <-time.After(time.Second * 2):
+			return rpc.ErrWrongLeader, nil
 		}
 	}
 }

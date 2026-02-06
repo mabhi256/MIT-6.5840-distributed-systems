@@ -3,11 +3,14 @@ package shardrpc
 import (
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
+	"github.com/google/uuid"
 )
 
 type FreezeShardArgs struct {
-	Shard shardcfg.Tshid
-	Num   shardcfg.Tnum
+	Shard    shardcfg.Tshid
+	Num      shardcfg.Tnum
+	ClientID uuid.UUID
+	ReqID    int
 }
 
 type FreezeShardReply struct {
@@ -17,9 +20,11 @@ type FreezeShardReply struct {
 }
 
 type InstallShardArgs struct {
-	Shard shardcfg.Tshid
-	State []byte
-	Num   shardcfg.Tnum
+	Shard    shardcfg.Tshid
+	State    []byte
+	Num      shardcfg.Tnum
+	ClientID uuid.UUID
+	ReqID    int
 }
 
 type InstallShardReply struct {
@@ -27,8 +32,10 @@ type InstallShardReply struct {
 }
 
 type DeleteShardArgs struct {
-	Shard shardcfg.Tshid
-	Num   shardcfg.Tnum
+	Shard    shardcfg.Tshid
+	Num      shardcfg.Tnum
+	ClientID uuid.UUID
+	ReqID    int
 }
 
 type DeleteShardReply struct {

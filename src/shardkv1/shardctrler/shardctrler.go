@@ -5,9 +5,13 @@ package shardctrler
 //
 
 import (
+	"time"
+
 	kvsrv "6.5840/kvsrv1"
+	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
 )
 
@@ -50,7 +54,51 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // changes the configuration it may be superseded by another
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
-	// Your code here.
+	for {
+		old := sck.Query()
+		if old.Num >= new.Num {
+			return
+		}
+
+		success := true
+		for i := range shardcfg.NShards {
+			shardId := shardcfg.Tshid(i)
+			oldGid, oldServers, oldExists := old.GidServers(shardId)
+			newGid, newServers, newExists := new.GidServers(shardId)
+			if !oldExists || !newExists {
+				success = false
+				break
+			}
+			if oldGid == newGid {
+				continue
+			}
+
+			oldClerk := shardgrp.MakeClerk(sck.clnt, oldServers)
+			shardState, err := oldClerk.FreezeShard(shardId, new.Num)
+			if err != rpc.OK {
+				success = false
+				break
+			}
+
+			newClerk := shardgrp.MakeClerk(sck.clnt, newServers)
+			err = newClerk.InstallShard(shardId, shardState, new.Num)
+			if err != rpc.OK {
+				success = false
+				break
+			}
+
+			err = oldClerk.DeleteShard(shardId, new.Num)
+			if err != rpc.OK {
+				success = false
+				break
+			}
+		}
+
+		if success {
+			sck.IKVClerk.Put("config", new.String(), rpc.Tversion(old.Num))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // Return the current configuration
