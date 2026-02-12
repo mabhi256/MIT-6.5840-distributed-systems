@@ -18,24 +18,27 @@ import (
 	"6.5840/shardkv1/shardctrler"
 	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
+	"github.com/google/uuid"
 )
 
 type Clerk struct {
-	clnt *tester.Clnt
-	sck  *shardctrler.ShardCtrler
-
-	shardGrpCks     map[tester.Tgid]*shardgrp.Clerk
-	shardGrpServers map[tester.Tgid][]string
+	clnt       *tester.Clnt
+	sck        *shardctrler.ShardCtrler
+	grpCks     map[tester.Tgid]*shardgrp.Clerk
+	grpServers map[tester.Tgid][]string
+	me         uuid.UUID
+	requestId  int
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
 // client can call it's Query method
 func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk {
 	ck := &Clerk{
-		clnt:            clnt,
-		sck:             sck,
-		shardGrpCks:     map[tester.Tgid]*shardgrp.Clerk{},
-		shardGrpServers: map[tester.Tgid][]string{},
+		clnt:       clnt,
+		sck:        sck,
+		grpCks:     map[tester.Tgid]*shardgrp.Clerk{},
+		grpServers: map[tester.Tgid][]string{},
+		me:         uuid.New(),
 	}
 	return ck
 }
@@ -45,17 +48,17 @@ func (ck *Clerk) getShardClerk(key string) *shardgrp.Clerk {
 	config := ck.sck.Query()
 
 	gid, servers, ok := config.GidServers(shardID)
-	if !ok {
+	if !ok || gid == 0 {
 		return nil
 	}
 
-	cachedServers := ck.shardGrpServers[gid]
+	cachedServers := ck.grpServers[gid]
 
-	shardCk, ok := ck.shardGrpCks[gid]
+	shardCk, ok := ck.grpCks[gid]
 	if !ok || !slices.Equal(cachedServers, servers) {
 		shardCk = shardgrp.MakeClerk(ck.clnt, servers)
-		ck.shardGrpCks[gid] = shardCk
-		ck.shardGrpServers[gid] = slices.Clone(servers)
+		ck.grpCks[gid] = shardCk
+		ck.grpServers[gid] = slices.Clone(servers)
 	}
 
 	return shardCk
@@ -67,6 +70,7 @@ func (ck *Clerk) getShardClerk(key string) *shardgrp.Clerk {
 // responsible for key.  You can make a clerk for that group by
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
+	ck.requestId++
 	for {
 		shardCk := ck.getShardClerk(key)
 		if shardCk == nil {
@@ -74,7 +78,12 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			continue
 		}
 
-		value, version, err := shardCk.Get(key)
+		getArgs := rpc.GetArgs{
+			Key:      key,
+			ClientID: ck.me,
+			ReqID:    ck.requestId,
+		}
+		value, version, err := shardCk.DoGet(&getArgs)
 		if err != rpc.ErrWrongGroup {
 			return value, version, err
 		}
@@ -84,6 +93,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
+	ck.requestId++
 	for {
 		shardCk := ck.getShardClerk(key)
 		if shardCk == nil {
@@ -91,7 +101,14 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			continue
 		}
 
-		err := shardCk.Put(key, value, version)
+		putArgs := rpc.PutArgs{
+			Key:      key,
+			Value:    value,
+			Version:  version,
+			ClientID: ck.me,
+			ReqID:    ck.requestId,
+		}
+		err := shardCk.DoPut(&putArgs)
 		if err != rpc.ErrWrongGroup {
 			return err
 		}

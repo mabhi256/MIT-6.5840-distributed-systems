@@ -1,7 +1,6 @@
 package rsm
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -10,20 +9,19 @@ import (
 	raft "6.5840/raft1"
 	"6.5840/raftapi"
 	tester "6.5840/tester1"
-	"github.com/google/uuid"
 )
 
 var useRaftStateMachine bool // to plug in another raft besided raft1
 
 type Op struct {
-	Me  int
-	Id  uuid.UUID
+	Id  uint64
 	Req any
 }
 
-type OpRes struct {
-	Id  uuid.UUID
-	Res any
+type PendingOp struct {
+	id      uint64
+	term    int
+	replyCh chan any
 }
 
 // A server (i.e., ../server.go) that wants to replicate itself calls
@@ -46,10 +44,9 @@ type RSM struct {
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
 
-	resChMap map[int]chan OpRes
-
-	ctx    context.Context
-	cancel context.CancelFunc
+	nextId      uint64
+	pending     map[int]*PendingOp
+	lastApplied int
 }
 
 // servers[] contains the ports of the set of
@@ -68,26 +65,24 @@ type RSM struct {
 // MakeRSM() must return quickly, so it should start goroutines for
 // any long-running work.
 func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
-	ctx, cancel := context.WithCancel(context.Background())
 	rsm := &RSM{
 		me:           me,
 		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg),
 		sm:           sm,
-		resChMap:     map[int]chan OpRes{},
-		ctx:          ctx,
-		cancel:       cancel,
+		nextId:       1,
+		pending:      map[int]*PendingOp{},
 	}
+
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		rsm.sm.Restore(snapshot)
+	}
+
 	if !useRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
 
-	DPrintf("[S%d]-------------------------RESTART\n", me)
-	snapshot := persister.ReadSnapshot()
-	if len(snapshot) > 0 {
-		rsm.sm.Restore(snapshot)
-		DPrintf("[S%d] Restore after crash\n", me)
-	}
 	go rsm.reader()
 
 	return rsm
@@ -97,96 +92,108 @@ func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
 }
 
-func (rsm *RSM) reader() {
-	defer rsm.cancel()
-
-	for {
-		msg := <-rsm.applyCh
-
-		switch {
-		case msg.CommandValid:
-			op := msg.Command.(Op)
-			// DPrintf("[S%d] Op: %v\n", rsm.me, op)
-
-			res := rsm.sm.DoOp(op.Req)
-			// DPrintf("[S%d] DoOp result: %v\n", rsm.me, res)
-
-			rsm.mu.Lock()
-			ch, exists := rsm.resChMap[msg.CommandIndex]
-			_, isLeader := rsm.rf.GetState()
-			rsm.mu.Unlock()
-			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() > rsm.maxraftstate {
-				rsm.rf.Snapshot(msg.CommandIndex, rsm.sm.Snapshot())
-				DPrintf("[S%d] Snapshot @ Index-%d\n", rsm.me, msg.CommandIndex)
-			}
-
-			if isLeader && exists && ch != nil {
-				opRes := OpRes{Id: op.Id, Res: res}
-				ch <- opRes
-			}
-
-		case msg.SnapshotValid:
-			// rsm.mu.Lock()
-			rsm.sm.Restore(msg.Snapshot)
-			DPrintf("[S%d] Restore @ Index-%d\n", rsm.me, msg.SnapshotIndex)
-			// rsm.mu.Unlock()
-
-		default:
-			return
-		}
-	}
-}
-
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
-	opId := uuid.New()
-	op := Op{Me: rsm.me, Id: opId, Req: req}
-
 	rsm.mu.Lock()
-	index, term, isLeader := rsm.rf.Start(op)
+	op := Op{Id: rsm.nextId, Req: req}
+	rsm.nextId++
 
+	index, term, isLeader := rsm.rf.Start(op)
 	if !isLeader {
 		rsm.mu.Unlock()
 		return rpc.ErrWrongLeader, nil
 	}
 
-	ch := make(chan OpRes)
-	rsm.resChMap[index] = ch
+	ch := make(chan any, 1)
+	rsm.pending[index] = &PendingOp{id: op.Id, term: term, replyCh: ch}
 	rsm.mu.Unlock()
 
-	defer func() {
-		// close(ch)
-		rsm.mu.Lock()
-		delete(rsm.resChMap, index)
-		rsm.mu.Unlock()
-	}()
-
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case opRes := <-ch:
-			rsm.mu.Lock()
-			term2, isLeader2 := rsm.rf.GetState()
-			rsm.mu.Unlock()
-			if term != term2 || !isLeader2 || op.Id != opRes.Id {
+		case result := <-ch:
+			if result == nil {
 				return rpc.ErrWrongLeader, nil
+			} else {
+				return rpc.OK, result
 			}
-			return rpc.OK, opRes.Res
 
 		case <-ticker.C:
-			rsm.mu.Lock()
 			term2, isLeader2 := rsm.rf.GetState()
-			rsm.mu.Unlock()
 			if term != term2 || !isLeader2 {
+				rsm.mu.Lock()
+				delete(rsm.pending, index)
+				rsm.mu.Unlock()
 				return rpc.ErrWrongLeader, nil
 			}
+		}
+	}
+}
 
-		case <-rsm.ctx.Done():
-			return rpc.ErrWrongLeader, nil
+func (rsm *RSM) reader() {
+	for msg := range rsm.applyCh {
+		switch {
+		case msg.CommandValid:
+			rsm.applyCommand(msg)
+		case msg.SnapshotValid:
+			rsm.applySnapshot(msg)
+		}
+	}
 
-		case <-time.After(time.Second * 2):
-			return rpc.ErrWrongLeader, nil
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+
+	// Clean up all pending operations on shutdown
+	for index := range rsm.pending {
+		rsm.pending[index].replyCh <- nil
+		delete(rsm.pending, index)
+	}
+}
+
+func (rsm *RSM) applyCommand(msg raftapi.ApplyMsg) {
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+
+	if msg.CommandIndex <= rsm.lastApplied {
+		return
+	}
+	rsm.lastApplied = msg.CommandIndex
+
+	op := msg.Command.(Op)
+	res := rsm.sm.DoOp(op.Req)
+
+	if pending, exists := rsm.pending[msg.CommandIndex]; exists {
+		term, isLeader := rsm.rf.GetState()
+		if isLeader && term == pending.term && op.Id == pending.id {
+			pending.replyCh <- res
+		} else {
+			pending.replyCh <- nil
+		}
+		delete(rsm.pending, msg.CommandIndex)
+	}
+
+	if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() > rsm.maxraftstate {
+		rsm.rf.Snapshot(msg.CommandIndex, rsm.sm.Snapshot())
+		DPrintf("[S%d] Snapshot @ Index-%d\n", rsm.me, msg.CommandIndex)
+	}
+}
+
+func (rsm *RSM) applySnapshot(msg raftapi.ApplyMsg) {
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+
+	if msg.SnapshotIndex <= rsm.lastApplied {
+		return
+	}
+	rsm.sm.Restore(msg.Snapshot)
+	rsm.lastApplied = msg.SnapshotIndex
+
+	// Clean up stale pending operations
+	for index, pending := range rsm.pending {
+		if index <= msg.SnapshotIndex {
+			pending.replyCh <- nil
+			delete(rsm.pending, index)
 		}
 	}
 }

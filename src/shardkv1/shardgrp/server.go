@@ -3,7 +3,6 @@ package shardgrp
 import (
 	"bytes"
 	"log"
-	"sync"
 	"sync/atomic"
 
 	"6.5840/kvraft1/rsm"
@@ -34,16 +33,8 @@ type LastReply struct {
 	Reply any
 }
 
-type ShardStatus int
-
-const (
-	ShardOrphaned  ShardStatus = iota // Never owned or fully deleted
-	ShardInstalled                    // Active ownership
-	ShardFrozen                       // Frozen for migration
-)
-
 type ShardData struct {
-	Status ShardStatus
+	Frozen bool
 	CfgNum shardcfg.Tnum
 	Store  map[string]Record
 	Cache  map[uuid.UUID]LastReply
@@ -55,206 +46,190 @@ type KVServer struct {
 	rsm  *rsm.RSM
 	gid  tester.Tgid
 
-	mu     sync.Mutex
 	Shards [shardcfg.NShards]ShardData
 }
 
 func (kv *KVServer) DoOp(req any) any {
 	switch req := req.(type) {
 	case rpc.GetArgs:
-		kv.mu.Lock()
-
-		defer kv.mu.Unlock()
-
-		reply := rpc.GetReply{}
-
-		shardID := shardcfg.Key2Shard(req.Key)
-		if kv.Shards[shardID].Status == ShardOrphaned {
-			reply.Err = rpc.ErrWrongGroup
-			return reply
-		}
-
-		cached := kv.Shards[shardID].Cache[req.ClientID]
-		if req.ReqID <= cached.ReqId {
-			return cached.Reply.(rpc.GetReply)
-		}
-
-		record, exists := kv.Shards[shardID].Store[req.Key]
-		if !exists {
-			DPrintf("[S%d] DoOp GET %v, ErrNoKey\n", kv.me, req)
-			reply.Err = rpc.ErrNoKey
-			return reply
-		}
-
-		reply.Err = rpc.OK
-		reply.Value = record.Value
-		reply.Version = record.Version
-
-		kv.Shards[shardID].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
-
-		DPrintf("[S%d] DoOp GET %v, reply:%v\n", kv.me, req, reply)
-		return reply
-
+		return kv.doGet(req)
 	case rpc.PutArgs:
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
-
-		reply := rpc.PutReply{}
-
-		shardID := shardcfg.Key2Shard(req.Key)
-		if kv.Shards[shardID].Status != ShardInstalled { // Rejects if NotOwned OR Frozen
-			reply.Err = rpc.ErrWrongGroup
-			return reply
-		}
-
-		cached := kv.Shards[shardID].Cache[req.ClientID]
-		if req.ReqID <= cached.ReqId {
-			return cached.Reply.(rpc.PutReply)
-		}
-
-		record, exists := kv.Shards[shardID].Store[req.Key]
-
-		switch {
-		case !exists && req.Version == 0:
-			// Version: 1 fails in porcupine for some reason
-			kv.Shards[shardID].Store[req.Key] = Record{Value: req.Value, Version: req.Version + 1}
-			reply.Err = rpc.OK
-
-		case !exists:
-			reply.Err = rpc.ErrNoKey
-
-		case record.Version != req.Version:
-			reply.Err = rpc.ErrVersion
-
-		default:
-			kv.Shards[shardID].Store[req.Key] = Record{Value: req.Value, Version: req.Version + 1}
-			reply.Err = rpc.OK
-		}
-
-		kv.Shards[shardID].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
-
-		DPrintf("[S%d] DoOp PUT %v, reply:%v\n", kv.me, req, reply)
-		return reply
-
+		return kv.doPut(req)
 	case shardrpc.FreezeShardArgs:
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
-
-		shardData := &kv.Shards[req.Shard]
-
-		reply := shardrpc.FreezeShardReply{}
-		if shardData.Status == ShardOrphaned {
-			reply.Err = rpc.ErrWrongGroup
-			return reply
-		}
-
-		cached := shardData.Cache[req.ClientID]
-		if req.ReqID <= cached.ReqId {
-			return cached.Reply.(shardrpc.FreezeShardReply)
-		}
-
-		// First time freezing for this config
-		if req.Num > shardData.CfgNum {
-			kv.Shards[req.Shard].Status = ShardFrozen
-			kv.Shards[req.Shard].CfgNum = req.Num
-		}
-
-		w := new(bytes.Buffer)
-		e := labgob.NewEncoder(w)
-		e.Encode(kv.Shards[req.Shard].Store)
-		e.Encode(kv.Shards[req.Shard].Cache)
-
-		reply.State = w.Bytes()
-		reply.Err = rpc.OK
-		reply.Num = kv.Shards[req.Shard].CfgNum
-
-		kv.Shards[req.Shard].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
-
-		return reply
-
+		return kv.doFreezeShard(req)
 	case shardrpc.InstallShardArgs:
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
-
-		cached := kv.Shards[req.Shard].Cache[req.ClientID]
-		if req.ReqID <= cached.ReqId {
-			return cached.Reply.(shardrpc.InstallShardReply)
-		}
-		// Note: Don't check for ownership, we already removed it during Freeze
-
-		reply := shardrpc.InstallShardReply{}
-
-		shardData := &kv.Shards[req.Shard]
-
-		if req.Num <= shardData.CfgNum {
-			reply.Err = rpc.OK
-			return reply
-		}
-
-		kv.Shards[req.Shard].Status = ShardInstalled
-		kv.Shards[req.Shard].CfgNum = req.Num
-
-		if req.State != nil {
-			r := bytes.NewBuffer(req.State)
-			d := labgob.NewDecoder(r)
-
-			var store map[string]Record
-			var lastReply map[uuid.UUID]LastReply
-
-			if d.Decode(&store) != nil {
-				log.Fatalf("%v couldn't decode store", kv.me)
-			}
-			if d.Decode(&lastReply) != nil {
-				log.Fatalf("%v couldn't decode lastReply", kv.me)
-			}
-
-			kv.Shards[req.Shard].Store = store
-			kv.Shards[req.Shard].Cache = lastReply
-		}
-
-		reply.Err = rpc.OK
-
-		kv.Shards[req.Shard].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
-
-		return reply
-
+		return kv.doInstallShard(req)
 	case shardrpc.DeleteShardArgs:
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
+		return kv.doDeleteShard(req)
+	default:
+		return nil
+	}
+}
 
-		cached := kv.Shards[req.Shard].Cache[req.ClientID]
-		if req.ReqID <= cached.ReqId {
-			return cached.Reply.(shardrpc.DeleteShardReply)
-		}
-		// Note: Don't check for ownership, we already removed it during Freeze
+func (kv *KVServer) doGet(req rpc.GetArgs) rpc.GetReply {
+	reply := rpc.GetReply{}
 
-		reply := shardrpc.DeleteShardReply{}
-
-		shardData := &kv.Shards[req.Shard]
-
-		if req.Num < shardData.CfgNum {
-			reply.Err = rpc.OK
-			return reply
-		}
-
-		kv.Shards[req.Shard].Status = ShardOrphaned
-		kv.Shards[req.Shard].CfgNum = req.Num
-
-		// DON'T clear the cache - keep it for deduplication ?
-		kv.Shards[req.Shard].Store = map[string]Record{}
-		kv.Shards[req.Shard].Cache = map[uuid.UUID]LastReply{}
-
-		reply.Err = rpc.OK
+	shardID := shardcfg.Key2Shard(req.Key)
+	if kv.Shards[shardID].Frozen {
+		reply.Err = rpc.ErrWrongGroup
 		return reply
 	}
 
-	return nil
+	cached, exists := kv.Shards[shardID].Cache[req.ClientID]
+	if exists && req.ReqID <= cached.ReqId {
+		return cached.Reply.(rpc.GetReply)
+	}
+
+	record, exists := kv.Shards[shardID].Store[req.Key]
+	if !exists {
+		DPrintf("[S%d] DoOp GET %v, ErrNoKey\n", kv.me, req)
+		reply.Err = rpc.ErrNoKey
+		return reply
+	}
+	// if store is empty and shard is at higher config, then reject
+	if len(kv.Shards[shardID].Store) == 0 && kv.Shards[shardID].CfgNum > shardcfg.NumFirst {
+		reply.Err = rpc.ErrWrongGroup
+		return reply
+	}
+
+	reply.Err = rpc.OK
+	reply.Value = record.Value
+	reply.Version = record.Version
+
+	kv.Shards[shardID].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
+
+	DPrintf("[S%d] DoOp GET %v, reply:%v\n", kv.me, req, reply)
+	return reply
+}
+
+func (kv *KVServer) doPut(req rpc.PutArgs) rpc.PutReply {
+	reply := rpc.PutReply{}
+
+	shardID := shardcfg.Key2Shard(req.Key)
+	if kv.Shards[shardID].Frozen {
+		reply.Err = rpc.ErrWrongGroup
+		return reply
+	}
+
+	cached, exists := kv.Shards[shardID].Cache[req.ClientID]
+	if exists && req.ReqID <= cached.ReqId {
+		return cached.Reply.(rpc.PutReply)
+	}
+
+	record, exists := kv.Shards[shardID].Store[req.Key]
+
+	switch {
+	case !exists && req.Version != 0:
+		reply.Err = rpc.ErrNoKey
+
+	case record.Version != req.Version:
+		reply.Err = rpc.ErrVersion
+
+	default:
+		kv.Shards[shardID].Store[req.Key] = Record{Value: req.Value, Version: req.Version + 1}
+		reply.Err = rpc.OK
+	}
+
+	kv.Shards[shardID].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
+
+	DPrintf("[S%d] DoOp PUT %v, reply:%v\n", kv.me, req, reply)
+	return reply
+}
+
+func (kv *KVServer) doFreezeShard(req shardrpc.FreezeShardArgs) shardrpc.FreezeShardReply {
+	shardData := &kv.Shards[req.Shard]
+
+	cached, exists := shardData.Cache[req.ClientID]
+	if exists && req.ReqID <= cached.ReqId {
+		return cached.Reply.(shardrpc.FreezeShardReply)
+	}
+
+	// First time freezing for this config
+	if req.Num > shardData.CfgNum {
+		kv.Shards[req.Shard].Frozen = true
+		kv.Shards[req.Shard].CfgNum = req.Num
+	}
+
+	reply := shardrpc.FreezeShardReply{}
+	reply.State = kv.snapshotShard(req.Shard)
+	reply.Err = rpc.OK
+	reply.Num = kv.Shards[req.Shard].CfgNum
+
+	kv.Shards[req.Shard].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
+
+	DPrintf("[S%d] DoOp FreezeShardArgs %v\n", kv.me, req)
+	return reply
+}
+
+func (kv *KVServer) doInstallShard(req shardrpc.InstallShardArgs) shardrpc.InstallShardReply {
+	cached, exists := kv.Shards[req.Shard].Cache[req.ClientID]
+	if exists && req.ReqID <= cached.ReqId {
+		return cached.Reply.(shardrpc.InstallShardReply)
+	}
+
+	reply := shardrpc.InstallShardReply{}
+	if req.Num > kv.Shards[req.Shard].CfgNum {
+		kv.Shards[req.Shard].Frozen = false
+		kv.Shards[req.Shard].CfgNum = req.Num
+
+		if req.State != nil {
+			kv.restoreShard(req.Shard, req.State)
+		}
+	}
+	reply.Err = rpc.OK
+	kv.Shards[req.Shard].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
+
+	DPrintf("[S%d] DoOp InstallShardReply %v\n", kv.me, req.ReqID)
+	return reply
+}
+
+func (kv *KVServer) doDeleteShard(req shardrpc.DeleteShardArgs) shardrpc.DeleteShardReply {
+	cached, exists := kv.Shards[req.Shard].Cache[req.ClientID]
+	if exists && req.ReqID <= cached.ReqId {
+		return cached.Reply.(shardrpc.DeleteShardReply)
+	}
+
+	if req.Num >= kv.Shards[req.Shard].CfgNum {
+		kv.Shards[req.Shard].CfgNum = req.Num
+		kv.Shards[req.Shard].Store = map[string]Record{}
+		kv.Shards[req.Shard].Cache = map[uuid.UUID]LastReply{}
+		kv.Shards[req.Shard].Frozen = true
+	}
+	reply := shardrpc.DeleteShardReply{Err: rpc.OK}
+	kv.Shards[req.Shard].Cache[req.ClientID] = LastReply{ReqId: req.ReqID, Reply: reply}
+
+	DPrintf("[S%d] DoOp DeleteShardArgs %v\n", kv.me, req)
+	return reply
+}
+
+func (kv *KVServer) snapshotShard(id shardcfg.Tshid) []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.Shards[id].Store)
+	e.Encode(kv.Shards[id].Cache)
+
+	return w.Bytes()
+}
+
+func (kv *KVServer) restoreShard(id shardcfg.Tshid, data []byte) {
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var store map[string]Record
+	var lastReply map[uuid.UUID]LastReply
+
+	if d.Decode(&store) != nil {
+		log.Fatalf("%v couldn't decode store", kv.me)
+	}
+	if d.Decode(&lastReply) != nil {
+		log.Fatalf("%v couldn't decode lastReply", kv.me)
+	}
+
+	kv.Shards[id].Store = store
+	kv.Shards[id].Cache = lastReply
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(kv.Shards)
@@ -263,9 +238,6 @@ func (kv *KVServer) Snapshot() []byte {
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
@@ -370,30 +342,19 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(shardrpc.FreezeShardReply{})
 	labgob.Register(shardrpc.InstallShardReply{})
 	labgob.Register(shardrpc.DeleteShardReply{})
-	labgob.Register(Record{})
-	labgob.Register(ShardData{})
 	labgob.Register(LastReply{})
-	labgob.Register(uuid.UUID{})
 
 	kv := &KVServer{gid: gid, me: me}
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	for i := range shardcfg.NShards {
 		kv.Shards[i].Store = make(map[string]Record)
 		kv.Shards[i].Cache = map[uuid.UUID]LastReply{}
-	}
+		kv.Shards[i].CfgNum = shardcfg.NumFirst
 
-	// The first shardgrp (shardcfg.Gid1) owns all shards.
-	if gid == shardcfg.Gid1 {
-		for i := range shardcfg.NShards {
-			kv.Shards[i].Status = ShardInstalled
-			kv.Shards[i].CfgNum = shardcfg.NumFirst
-		}
-	} else {
-		for i := range shardcfg.NShards {
-			kv.Shards[i].Status = ShardOrphaned
-		}
+		// The first shardgrp (shardcfg.Gid1) owns all shards.
+		kv.Shards[i].Frozen = gid != shardcfg.Gid1
 	}
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []tester.IService{kv, kv.rsm.Raft()}
 }
