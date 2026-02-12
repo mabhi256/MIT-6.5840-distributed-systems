@@ -2,6 +2,7 @@ package rsm
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"6.5840/kvsrv1/rpc"
@@ -47,6 +48,7 @@ type RSM struct {
 	nextId      uint64
 	pending     map[int]*PendingOp
 	lastApplied int
+	dead        atomic.Int32
 }
 
 // servers[] contains the ports of the set of
@@ -94,6 +96,12 @@ func (rsm *RSM) Raft() raftapi.Raft {
 
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	rsm.mu.Lock()
+
+	// Check if already shut down
+	if rsm.dead.Load() == 1 {
+		return rpc.ErrWrongLeader, nil
+	}
+
 	op := Op{Id: rsm.nextId, Req: req}
 	rsm.nextId++
 
@@ -120,6 +128,14 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 			}
 
 		case <-ticker.C:
+			// Check for shutdown on each tick
+			if rsm.dead.Load() == 1 {
+				rsm.mu.Lock()
+				delete(rsm.pending, index)
+				rsm.mu.Unlock()
+				return rpc.ErrWrongLeader, nil
+			}
+
 			term2, isLeader2 := rsm.rf.GetState()
 			if term != term2 || !isLeader2 {
 				rsm.mu.Lock()
@@ -140,6 +156,9 @@ func (rsm *RSM) reader() {
 			rsm.applySnapshot(msg)
 		}
 	}
+
+	// Mark as dead when applyCh closes
+	rsm.dead.Store(1)
 
 	rsm.mu.Lock()
 	defer rsm.mu.Unlock()

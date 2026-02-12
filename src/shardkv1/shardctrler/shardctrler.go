@@ -77,10 +77,31 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 			return
 		}
 
-		_, nextVer, _ := sck.getNext()
-		if err := sck.saveNext(new, nextVer); err != rpc.OK {
-			time.Sleep(20 * time.Millisecond)
-			continue
+		existingNext, nextVer, _ := sck.getNext()
+		// Check if another controller already claimed this config number
+		if existingNext != nil && existingNext.Num == new.Num {
+			// Different config with same Num → another controller won, abort
+			if existingNext.String() != new.String() {
+				return
+			}
+			// Same config → we can continue (idempotent recovery)
+		} else if existingNext != nil && existingNext.Num > new.Num {
+			// A newer config is being processed, we're obsolete
+			return
+		}
+
+		// Try to claim this config by saving to next
+		// Skip if already saved with our exact config
+		if existingNext == nil || existingNext.String() != new.String() {
+			err := sck.saveNext(new, nextVer)
+			if err == rpc.ErrVersion {
+				// Someone else updated next, retry to check what they saved
+				time.Sleep(20 * time.Millisecond)
+				continue
+			} else if err != rpc.OK {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
 		}
 
 		if !sck.moveShards(current, new) {

@@ -30,44 +30,28 @@
 
 ```bash
 ❯ cd src/kvsrv1
-❯ go test -v
-=== RUN   TestReliablePut
+❯ go test
 One client and reliable Put (reliable network)...
   ... Passed --  time  0.0s #peers 1 #RPCs     5 #Ops    0
---- PASS: TestReliablePut (0.00s)
-=== RUN   TestPutConcurrentReliable
 Test: many clients racing to put values to the same key (reliable network)...
   ... Passed --  time  3.1s #peers 1 #RPCs 65325 #Ops 65325
---- PASS: TestPutConcurrentReliable (3.06s)
-=== RUN   TestMemPutManyClientsReliable
 Test: memory use many put clients (reliable network)...
   ... Passed --  time  9.4s #peers 1 #RPCs 100000 #Ops    0
---- PASS: TestMemPutManyClientsReliable (17.34s)
-=== RUN   TestUnreliableNet
 One client (unreliable network)...
   ... Passed --  time  6.6s #peers 1 #RPCs   282 #Ops  218
---- PASS: TestUnreliableNet (6.62s)
 PASS
 ok      6.5840/kvsrv1   27.036s
 
 ❯ cd lock/
-❯ go test -v
-=== RUN   TestOneClientReliable
+❯ go test
 Test: 1 lock clients (reliable network)...
   ... Passed --  time  2.0s #peers 1 #RPCs   407 #Ops    0
---- PASS: TestOneClientReliable (2.02s)
-=== RUN   TestManyClientsReliable
 Test: 10 lock clients (reliable network)...
   ... Passed --  time  2.2s #peers 1 #RPCs 123745 #Ops    0
---- PASS: TestManyClientsReliable (2.20s)
-=== RUN   TestOneClientUnreliable
 Test: 1 lock clients (unreliable network)...
   ... Passed --  time  2.2s #peers 1 #RPCs    86 #Ops    0
---- PASS: TestOneClientUnreliable (2.17s)
-=== RUN   TestManyClientsUnreliable
 Test: 10 lock clients (unreliable network)...
   ... Passed --  time  3.5s #peers 1 #RPCs  1768 #Ops    0
---- PASS: TestManyClientsUnreliable (3.48s)
 PASS
 ok      6.5840/kvsrv1/lock      9.859s
 ```
@@ -83,119 +67,63 @@ The lab3-naive branch spawns goroutine per RPC
 
 ```bash
 ❯ cd src/raft1
-❯ go test -v
-=== RUN   TestInitialElection3A
+❯ go test
 Test (3A): initial election (reliable network)...
   ... Passed --  time  3.0s #peers 3 #RPCs    56 #Ops    0
---- PASS: TestInitialElection3A (3.02s)
-=== RUN   TestReElection3A
 Test (3A): election after network failure (reliable network)...
   ... Passed --  time  6.0s #peers 3 #RPCs   164 #Ops    0
---- PASS: TestReElection3A (5.98s)
-=== RUN   TestManyElections3A
 Test (3A): multiple elections (reliable network)...
   ... Passed --  time  5.6s #peers 7 #RPCs   564 #Ops    0
---- PASS: TestManyElections3A (5.60s)
-=== RUN   TestBasicAgree3B
 Test (3B): basic agreement (reliable network)...
   ... Passed --  time  0.6s #peers 3 #RPCs    16 #Ops    0
---- PASS: TestBasicAgree3B (0.63s)
-=== RUN   TestRPCBytes3B
 Test (3B): RPC byte count (reliable network)...
   ... Passed --  time  1.5s #peers 3 #RPCs    50 #Ops    0
---- PASS: TestRPCBytes3B (1.53s)
-=== RUN   TestFollowerFailure3B
 Test (3B): test progressive failure of followers (reliable network)...
   ... Passed --  time  4.7s #peers 3 #RPCs   117 #Ops    0
---- PASS: TestFollowerFailure3B (4.69s)
-=== RUN   TestLeaderFailure3B
 Test (3B): test failure of leaders (reliable network)...
   ... Passed --  time  5.3s #peers 3 #RPCs   198 #Ops    0
---- PASS: TestLeaderFailure3B (5.29s)
-=== RUN   TestFailAgree3B
 Test (3B): agreement after follower reconnects (reliable network)...
   ... Passed --  time  3.5s #peers 3 #RPCs    83 #Ops    0
---- PASS: TestFailAgree3B (3.54s)
-=== RUN   TestFailNoAgree3B
 Test (3B): no agreement if too many followers disconnect (reliable network)...
   ... Passed --  time  3.6s #peers 5 #RPCs   198 #Ops    0
---- PASS: TestFailNoAgree3B (3.57s)
-=== RUN   TestConcurrentStarts3B
 Test (3B): concurrent Start()s (reliable network)...
   ... Passed --  time  0.6s #peers 3 #RPCs    14 #Ops    0
---- PASS: TestConcurrentStarts3B (0.65s)
-=== RUN   TestRejoin3B
 Test (3B): rejoin of partitioned leader (reliable network)...
   ... Passed --  time  4.1s #peers 3 #RPCs   143 #Ops    0
---- PASS: TestRejoin3B (4.07s)
-=== RUN   TestBackup3B
 Test (3B): leader backs up quickly over incorrect follower logs (reliable network)...
   ... Passed --  time 17.0s #peers 5 #RPCs  1562 #Ops    0
---- PASS: TestBackup3B (17.02s)
-=== RUN   TestCount3B
 Test (3B): RPC counts arent too high (reliable network)...
   ... Passed --  time  2.6s #peers 3 #RPCs    44 #Ops    0
---- PASS: TestCount3B (2.55s)
-=== RUN   TestPersist13C
 Test (3C): basic persistence (reliable network)...
   ... Passed --  time  4.0s #peers 3 #RPCs    75 #Ops    0
---- PASS: TestPersist13C (3.98s)
-=== RUN   TestPersist23C
 Test (3C): more persistence (reliable network)...
   ... Passed --  time 12.3s #peers 5 #RPCs   344 #Ops    0
---- PASS: TestPersist23C (12.28s)
-=== RUN   TestPersist33C
 Test (3C): partitioned leader and one follower crash, leader restarts (reliable network)...
   ... Passed --  time  1.7s #peers 3 #RPCs    38 #Ops    0
---- PASS: TestPersist33C (1.75s)
-=== RUN   TestFigure83C
 Test (3C): Figure 8 (reliable network)...
   ... Passed --  time 30.2s #peers 5 #RPCs   970 #Ops    0
---- PASS: TestFigure83C (30.16s)
-=== RUN   TestUnreliableAgree3C
 Test (3C): unreliable agreement (unreliable network)...
   ... Passed --  time  2.4s #peers 5 #RPCs   360 #Ops    0
---- PASS: TestUnreliableAgree3C (2.35s)
-=== RUN   TestFigure8Unreliable3C
 Test (3C): Figure 8 (unreliable) (unreliable network)...
   ... Passed --  time 31.8s #peers 5 #RPCs  3137 #Ops    0
---- PASS: TestFigure8Unreliable3C (31.82s)
-=== RUN   TestReliableChurn3C
 Test (3C): churn (reliable network)...
   ... Passed --  time 16.3s #peers 5 #RPCs  2163 #Ops    0
---- PASS: TestReliableChurn3C (16.26s)
-=== RUN   TestUnreliableChurn3C
 Test (3C): unreliable churn (unreliable network)...
   ... Passed --  time 16.2s #peers 5 #RPCs  1130 #Ops    0
---- PASS: TestUnreliableChurn3C (16.16s)
-=== RUN   TestSnapshotBasic3D
 Test (3D): snapshots basic (reliable network)...
   ... Passed --  time  4.1s #peers 3 #RPCs   152 #Ops    0
---- PASS: TestSnapshotBasic3D (4.07s)
-=== RUN   TestSnapshotInstall3D
 Test (3D): install snapshots (disconnect) (reliable network)...
   ... Passed --  time 45.7s #peers 3 #RPCs  1152 #Ops    0
---- PASS: TestSnapshotInstall3D (45.74s)
-=== RUN   TestSnapshotInstallUnreliable3D
 Test (3D): install snapshots (disconnect) (unreliable network)...
   ... Passed --  time 45.2s #peers 3 #RPCs  1174 #Ops    0
---- PASS: TestSnapshotInstallUnreliable3D (45.19s)
-=== RUN   TestSnapshotInstallCrash3D
 Test (3D): install snapshots (crash) (reliable network)...
   ... Passed --  time 33.3s #peers 3 #RPCs   698 #Ops    0
---- PASS: TestSnapshotInstallCrash3D (33.29s)
-=== RUN   TestSnapshotInstallUnCrash3D
 Test (3D): install snapshots (crash) (unreliable network)...
   ... Passed --  time 38.0s #peers 3 #RPCs   802 #Ops    0
---- PASS: TestSnapshotInstallUnCrash3D (37.98s)
-=== RUN   TestSnapshotAllCrash3D
 Test (3D): crash and restart all servers (unreliable network)...
   ... Passed --  time 10.1s #peers 3 #RPCs   311 #Ops    0
---- PASS: TestSnapshotAllCrash3D (10.07s)
-=== RUN   TestSnapshotInit3D
 Test (3D): snapshot initialization after crash (unreliable network)...
   ... Passed --  time  3.7s #peers 3 #RPCs    90 #Ops    0
---- PASS: TestSnapshotInit3D (3.74s)
 PASS
 ok      6.5840/raft1    352.991s
 ```
@@ -212,145 +140,168 @@ for i in {1..20}; do go test || break; done
 
 ```bash
 ❯ cd src/kvraft1/rsm/
-❯ go test -v
-=== RUN   TestBasic4A
+❯ go test
 Test RSM basic (reliable network)...
-  ... Passed --  time  1.5s #peers 3 #RPCs    46 #Ops    0
---- PASS: TestBasic4A (1.49s)
-=== RUN   TestConcurrent4A
+  ... Passed --  time  1.4s #peers 3 #RPCs    44 #Ops    0
 Test concurrent submit (reliable network)...
-  ... Passed --  time  0.6s #peers 3 #RPCs    10 #Ops    0
---- PASS: TestConcurrent4A (0.58s)
-=== RUN   TestLeaderFailure4A
+  ... Passed --  time  0.6s #peers 3 #RPCs    12 #Ops    0
 Test Leader Failure (reliable network)...
-  ... Passed --  time  1.5s #peers 3 #RPCs    36 #Ops    0
---- PASS: TestLeaderFailure4A (1.54s)
-=== RUN   TestLeaderPartition4A
+  ... Passed --  time  1.7s #peers 3 #RPCs    49 #Ops    0
 Test Leader Partition (reliable network)...
-  ... Passed --  time  2.1s #peers 3 #RPCs   129 #Ops    0
---- PASS: TestLeaderPartition4A (2.09s)
-=== RUN   TestRestartReplay4A
+  ... Passed --  time  2.1s #peers 3 #RPCs   131 #Ops    0
 Test Restart (reliable network)...
   ... Passed --  time 12.9s #peers 3 #RPCs   430 #Ops    0
---- PASS: TestRestartReplay4A (12.87s)
-=== RUN   TestShutdown4A
 Test Shutdown (reliable network)...
   ... Passed --  time 10.0s #peers 3 #RPCs     0 #Ops    0
---- PASS: TestShutdown4A (10.02s)
-=== RUN   TestRestartSubmit4A
 Test Restart and submit (reliable network)...
-  ... Passed --  time 23.5s #peers 3 #RPCs   448 #Ops    0
---- PASS: TestRestartSubmit4A (23.53s)
-=== RUN   TestSnapshot4C
+  ... Passed --  time 14.9s #peers 3 #RPCs   462 #Ops    0
 Test creating and restoring snapshot (reliable network)...
 labgob warning: Decoding into a non-default variable/field int may not work
-  ... Passed --  time  1.6s #peers 3 #RPCs   136 #Ops    0
---- PASS: TestSnapshot4C (1.57s)
+  ... Passed --  time  1.9s #peers 3 #RPCs   202 #Ops    0
 PASS
-ok      6.5840/kvraft1/rsm      53.697s
+ok      6.5840/kvraft1/rsm      45.878s
 
 ❯ cd ..
-❯ go test -v
-=== RUN   TestBasic4B
+❯ go test
 Test: one client (4B basic) (reliable network)...
-  ... Passed --  time  3.0s #peers 5 #RPCs  1892 #Ops  231
---- PASS: TestBasic4B (3.05s)
-=== RUN   TestSpeed4B
+  ... Passed --  time  3.0s #peers 5 #RPCs  3012 #Ops  461
 Test: one client (4B speed) (reliable network)...
-  ... Passed --  time  7.3s #peers 3 #RPCs  3363 #Ops    0
---- PASS: TestSpeed4B (7.33s)
-=== RUN   TestConcurrent4B
+  ... Passed --  time  5.9s #peers 3 #RPCs  4149 #Ops    0
 Test: many clients (4B many clients) (reliable network)...
-  ... Passed --  time  3.2s #peers 5 #RPCs  4597 #Ops 1749
---- PASS: TestConcurrent4B (3.19s)
-=== RUN   TestUnreliable4B
+  ... Passed --  time  3.2s #peers 5 #RPCs  4464 #Ops 1677
 Test: many clients (4B many clients) (unreliable network)...
-  ... Passed --  time  5.3s #peers 5 #RPCs  1568 #Ops  143
---- PASS: TestUnreliable4B (5.32s)
-=== RUN   TestOnePartition4B
+  ... Passed --  time  4.5s #peers 5 #RPCs  1269 #Ops  151
 Test: one client (4B progress in majority) (unreliable network)...
-  ... Passed --  time  1.6s #peers 5 #RPCs   183 #Ops    3
+  ... Passed --  time  2.5s #peers 5 #RPCs   281 #Ops    3
 Test: no progress in minority (4B) (unreliable network)...
-  ... Passed --  time  1.2s #peers 5 #RPCs   209 #Ops    3
+  ... Passed --  time  1.8s #peers 5 #RPCs   327 #Ops    3
 Test: completion after heal (4B) (unreliable network)...
-  ... Passed --  time  1.1s #peers 5 #RPCs    87 #Ops    4
---- PASS: TestOnePartition4B (3.79s)
-=== RUN   TestManyPartitionsOneClient4B
+  ... Passed --  time  1.2s #peers 5 #RPCs    97 #Ops    4
 Test: partitions, one client (4B partitions, one client) (reliable network)...
-  ... Passed --  time 10.3s #peers 5 #RPCs  2286 #Ops  229
---- PASS: TestManyPartitionsOneClient4B (10.27s)
-=== RUN   TestManyPartitionsManyClients4B
+  ... Passed --  time  9.3s #peers 5 #RPCs  2875 #Ops  459
 Test: partitions, many clients (4B partitions, many clients (4B)) (reliable network)...
-  ... Passed --  time  9.4s #peers 5 #RPCs  3214 #Ops 1721
---- PASS: TestManyPartitionsManyClients4B (9.38s)
-=== RUN   TestPersistOneClient4B
+  ... Passed --  time 11.4s #peers 5 #RPCs  6916 #Ops 1733
 Test: restarts, one client (4B restarts, one client 4B ) (reliable network)...
-  ... Passed --  time  6.0s #peers 5 #RPCs  1167 #Ops  155
---- PASS: TestPersistOneClient4B (6.04s)
-=== RUN   TestPersistConcurrent4B
+  ... Passed --  time  6.0s #peers 5 #RPCs  1021 #Ops  131
 Test: restarts, many clients (4B restarts, many clients) (reliable network)...
-  ... Passed --  time  6.5s #peers 5 #RPCs  3896 #Ops  915
---- PASS: TestPersistConcurrent4B (6.51s)
-=== RUN   TestPersistConcurrentUnreliable4B
+  ... Passed --  time  6.3s #peers 5 #RPCs  3108 #Ops 1147
 Test: restarts, many clients (4B restarts, many clients ) (unreliable network)...
-  ... Passed --  time  7.4s #peers 5 #RPCs  1160 #Ops  143
---- PASS: TestPersistConcurrentUnreliable4B (7.42s)
-=== RUN   TestPersistPartition4B
+  ... Passed --  time  7.5s #peers 5 #RPCs  1089 #Ops   95
 Test: restarts, partitions, many clients (4B restarts, partitions, many clients) (reliable network)...
-  ... Passed --  time 12.2s #peers 5 #RPCs  3888 #Ops  771
---- PASS: TestPersistPartition4B (12.24s)
-=== RUN   TestPersistPartitionUnreliable4B
+  ... Passed --  time 12.1s #peers 5 #RPCs  3440 #Ops  941
 Test: restarts, partitions, many clients (4B restarts, partitions, many clients) (unreliable network)...
-  ... Passed --  time 13.6s #peers 5 #RPCs  1558 #Ops  101
---- PASS: TestPersistPartitionUnreliable4B (13.58s)
-=== RUN   TestPersistPartitionUnreliableLinearizable4B
-Test: restarts, partitions, random keys, many clients (4B restarts, partitions, random keys, many clients) (unreliable network)...
-  ... Passed --  time 14.5s #peers 7 #RPCs  3947 #Ops  178
---- PASS: TestPersistPartitionUnreliableLinearizable4B (14.46s)
-=== RUN   TestSnapshotRPC4C
+  ... Passed --  time 13.5s #peers 5 #RPCs  1445 #Ops   89
+Test: restarts, partitions, random keys, many clients (4B restarts, partitions, random keys, many clients) (unreliable network)...        
+  ... Passed --  time 19.9s #peers 7 #RPCs  5649 #Ops  128
 Test: snapshots, one client (4C SnapshotsRPC) (reliable network)...
 Test: InstallSnapshot RPC (4C) (reliable network)...
-  ... Passed --  time  2.4s #peers 3 #RPCs   289 #Ops   63
---- PASS: TestSnapshotRPC4C (2.42s)
-=== RUN   TestSnapshotSize4C
+  ... Passed --  time  2.3s #peers 3 #RPCs   220 #Ops   63
 Test: snapshots, one client (4C snapshot size is reasonable) (reliable network)...
-  ... Passed --  time  8.5s #peers 3 #RPCs  3252 #Ops  800
---- PASS: TestSnapshotSize4C (8.50s)
-=== RUN   TestSpeed4C
+  ... Passed --  time  6.5s #peers 3 #RPCs  2111 #Ops  800
 Test: snapshots, one client (4C speed) (reliable network)...
-  ... Passed --  time 10.5s #peers 3 #RPCs  5050 #Ops    0
---- PASS: TestSpeed4C (10.48s)
-=== RUN   TestSnapshotRecover4C
+  ... Passed --  time  6.1s #peers 3 #RPCs  3243 #Ops    0
 Test: restarts, snapshots, one client (4C restarts, snapshots, one client) (reliable network)...
-  ... Passed --  time  6.1s #peers 5 #RPCs  1604 #Ops  189
---- PASS: TestSnapshotRecover4C (6.05s)
-=== RUN   TestSnapshotRecoverManyClients4C
+  ... Passed --  time  6.0s #peers 5 #RPCs  1564 #Ops  227
 Test: restarts, snapshots, many clients (4C restarts, snapshots, many clients ) (reliable network)...
 info: linearizability check timed out, assuming history is ok
 info: linearizability check timed out, assuming history is ok
-  ... Passed --  time 10.0s #peers 5 #RPCs 13915 #Ops 4329
---- PASS: TestSnapshotRecoverManyClients4C (9.98s)
-=== RUN   TestSnapshotUnreliable4C
+info: linearizability check timed out, assuming history is ok
+  ... Passed --  time  9.7s #peers 5 #RPCs 11288 #Ops 4427
 Test: snapshots, many clients (4C unreliable net, snapshots, many clients) (unreliable network)...
-  ... Passed --  time  4.7s #peers 5 #RPCs  1204 #Ops  193
---- PASS: TestSnapshotUnreliable4C (4.71s)
-=== RUN   TestSnapshotUnreliableRecover4C
+  ... Passed --  time  4.1s #peers 5 #RPCs  1438 #Ops  119
 Test: restarts, snapshots, many clients (4C unreliable net, restarts, snapshots, many clients) (unreliable network)...
-  ... Passed --  time  7.8s #peers 5 #RPCs  1157 #Ops  115
---- PASS: TestSnapshotUnreliableRecover4C (7.80s)
-=== RUN   TestSnapshotUnreliableRecoverConcurrentPartition4C
+  ... Passed --  time  7.5s #peers 5 #RPCs  1008 #Ops   71
 Test: restarts, partitions, snapshots, many clients (4C unreliable net, restarts, partitions, snapshots, many clients) (unreliable network)...
-  ... Passed --  time 12.3s #peers 5 #RPCs  1451 #Ops  103
---- PASS: TestSnapshotUnreliableRecoverConcurrentPartition4C (12.26s)
-=== RUN   TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable4C
+  ... Passed --  time 12.2s #peers 5 #RPCs  1325 #Ops   69
 Test: restarts, partitions, snapshots, random keys, many clients (4C unreliable net, restarts, partitions, snapshots, random keys, many clients) (unreliable network)...
-  ... Passed --  time 20.0s #peers 7 #RPCs  6126 #Ops  198
---- PASS: TestSnapshotUnreliableRecoverConcurrentPartitionLinearizable4C (20.04s)
+  ... Passed --  time 16.9s #peers 7 #RPCs  4642 #Ops  154
 PASS
-ok      6.5840/kvraft1  184.812s
+ok      6.5840/kvraft1  179.884s
 ```
 
 Linearizability check (Porcupine) occassionally times out for TestSnapshotRecoverManyClients4C using 20 clients. If we test it for 15 clients then it doesn't timeout.
+
+## Lab 5: Sharded Key/Value Service
+
+<https://pdos.csail.mit.edu/6.824/labs/lab-shard1.html>
+
+Individual tests (5A, 5B, 5C) pass but combined tests `go test` fail
+
+```bash
+❯ cd src/shardkv1/
+❯ go test -run 5A
+Test (5A): Init and Query ... (reliable network)...
+  ... Passed --  time  0.0s #peers 1 #RPCs     2 #Ops    0
+Test (5A): one shard group ... (reliable network)...
+  ... Passed --  time  5.0s #peers 1 #RPCs  1227 #Ops  180
+Test (5A): a group joins... (reliable network)...
+  ... Passed --  time  7.9s #peers 1 #RPCs  4090 #Ops  180
+Test (5A): delete ... (reliable network)...
+  ... Passed --  time  3.6s #peers 1 #RPCs  1942 #Ops  360
+Test (5A): basic groups join/leave ... (reliable network)...
+  ... Passed --  time  7.8s #peers 1 #RPCs  4041 #Ops  240
+Test (5A): many groups join/leave ... (reliable network)...
+  ... Passed --  time 20.7s #peers 1 #RPCs  3850 #Ops  180
+Test (5A): many groups join/leave ... (unreliable network)...
+  ... Passed --  time 81.7s #peers 1 #RPCs  8882 #Ops  180
+Test (5A): shutdown ... (reliable network)...
+  ... Passed --  time 17.8s #peers 1 #RPCs  2559 #Ops  180
+Test (5A): progress ... (reliable network)...
+  ... Passed --  time 11.1s #peers 1 #RPCs  1079 #Ops   82
+Test (5A): progress ... (reliable network)...
+  ... Passed --  time 16.9s #peers 1 #RPCs  2394 #Ops  170
+Test (5A): one concurrent clerk reliable... (reliable network)...
+  ... Passed --  time 20.3s #peers 1 #RPCs  2976 #Ops  214
+Test (5A): many concurrent clerks reliable... (reliable network)...
+  ... Passed --  time 22.4s #peers 1 #RPCs  4820 #Ops  682
+Test (5A): one concurrent clerk unreliable ... (unreliable network)...
+  ... Passed --  time 44.1s #peers 1 #RPCs  4663 #Ops   52
+Test (5A): many concurrent clerks unreliable... (unreliable network)...
+  ... Passed --  time 53.1s #peers 1 #RPCs  6860 #Ops  378
+PASS
+ok      6.5840/shardkv1 313.100s
+
+❯ go test -run 5B
+Test (5B): Join/leave while a shardgrp is down... (reliable network)...
+  ... Passed --  time  5.1s #peers 1 #RPCs  1175 #Ops  120
+Test (5B): recover controller ... (reliable network)...
+  ... Passed --  time 18.4s #peers 1 #RPCs  4594 #Ops  360
+PASS
+ok      6.5840/shardkv1 24.012s
+
+❯ go test -run 5C
+Test (5C): Concurrent ctrlers ... (reliable network)...
+  ... Passed --  time  5.2s #peers 1 #RPCs  2691 #Ops  120
+Test (5C): Concurrent ctrlers ... (unreliable network)...
+  ... Passed --  time 25.7s #peers 1 #RPCs  4864 #Ops  120
+Test (5C): partition controller in join... (reliable network)...
+  ... Passed --  time  5.2s #peers 1 #RPCs  1324 #Ops  120
+Test (5C): controllers with leased leadership ... (reliable network)...
+  ... Passed --  time 23.3s #peers 1 #RPCs  4837 #Ops  360
+Test (5C): controllers with leased leadership ... (unreliable network)...
+  ... Passed --  time 46.5s #peers 1 #RPCs  4683 #Ops  240
+Test (5C): controllers with leased leadership ... (reliable network)...
+  ... Passed --  time 60.5s #peers 1 #RPCs 29092 #Ops 5498
+Test (5C): controllers with leased leadership ... (unreliable network)...
+  ... Passed --  time 60.7s #peers 1 #RPCs 18052 #Ops 2250
+PASS
+ok      6.5840/shardkv1 228.003s
+```
+
+When running combined tests
+
+```bash
+❯ go test
+...
+Test (5A): progress ... (reliable network)...
+Fatal: Two few gets finished 88; expected more than 100
+        C:/Users/mabhi/OneDrive/Desktop/MIT-6.5840-distributed-systems/src/shardkv1/shardkv_test.go:413
+info: wrote visualization to C:\Users\mabhi\AppData\Local\Temp\porcupine-1828895421.html
+--- FAIL: TestProgressJoin5A (14.78s)
+...
+Test (5C): Concurrent ctrlers ... (reliable network)...
+>> Hangs and times out
+```
 
 ---
 
